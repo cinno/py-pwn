@@ -4,7 +4,6 @@ import re
 import time
 from socket import *
 from threading import *
-from itertools import islice
 
 
 DEF_PORT_LIST = [
