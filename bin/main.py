@@ -4,6 +4,8 @@ import re
 import time
 from socket import *
 from threading import *
+from multiprocessing import Pool, Queue
+from timeit import Timer
 
 
 DEF_PORT_LIST = [
@@ -13,31 +15,32 @@ DEF_PORT_LIST = [
 ] + list(range(6890, 6999))
 
 
-
 screenLock = Semaphore(value=1)
 def connScan(tgtHost, tgtPort, quiet):
+    report = ''
     try:
         connSkt = socket(AF_INET, SOCK_STREAM)
         connSkt.connect((tgtHost, tgtPort))
         connSkt.send('jsdfijidsjfoi\r\n')
         results = connSkt.recv(1024)
-        screenLock.acquire()
-        print '     [+]%d/tcp open' % tgtPort
+        # screenLock.acquire()
+        report += '     [+]%d/tcp open' % tgtPort
         if (results == None) | (results == ''):
-            print '        No Response'
+            report += '        No Response\n'
         else:
-            print '        [Port %d Response]' % tgtPort
-            print '        ' + str(results).replace('\n', '\n        ')
+            report += '        [Port %d Response]\n' % tgtPort
+            report += '        ' + str(results).replace('\n', '\n        ') + '\n'
     except:
-        screenLock.acquire()
+        # screenLock.acquire()
         if (quiet == False):
-            print '     [-]%d/tcp closed' % tgtPort
+            report += '     [-]%d/tcp closed' % tgtPort
     finally:
         connSkt.close()
         screenLock.release()
+        return report
 
 
-def portScan(tgtHost, tgtPorts, quiet):
+def portScan((tgtHost, tgtPorts, quiet)):
     try:
         tgtIP = gethostbyname(tgtHost)
     except:
@@ -66,18 +69,18 @@ def main():
     tgtPorts = str(options.tgtPort).split(',')
     quietMode = options.quiet
 
-    if (tgtHost == None ) | (tgtPorts[0] == None):
+    if (tgtHost == None ):
         print parser.usage
         exit(0)
 
+    if (tgtPorts[0] == 'tcp'):
+        tgtPorts = (x for x in range(0, 65536))
+
     if (tgtHost.find('.x') != -1):
-        for lastOctet in range(1, 255):
-            curIp = tgtHost.replace('x', str(lastOctet))
-            t1 = Thread(target=portScan, name='scan[%s]' % curIp, args=(curIp, tgtPorts, quietMode))
-            t1.start()
-            time.sleep (0.25);
+        procPool = Pool(25)
+        procPool.map(portScan, ((tgtHost.replace('x', str(lastOctet)), tgtPorts, quietMode) for lastOctet in range(1, 255)))
     else:
-        portScan(tgtHost, tgtPorts, quietMode)
+        portScan((tgtHost, tgtPorts, quietMode))
 
 
 if __name__ == '__main__':
