@@ -1,9 +1,13 @@
 import optparse
 import socket
-import re
 import time
+import re
 from socket import *
 from threading import *
+from multiprocessing import Process
+from gevent.pool import Pool
+import gevent
+import datetime
 
 
 DEF_PORT_LIST = [
@@ -12,47 +16,68 @@ DEF_PORT_LIST = [
     8081,9091,9000, 9999, 9998, 9997, 138, 873, 3260, 6281, 5000, 5001, 995, 3005, 5353, 8324, 32469
 ] + list(range(6890, 6999))
 
-
-
-screenLock = Semaphore(value=1)
 def connScan(tgtHost, tgtPort, quiet):
+    portReport = ''
     try:
         connSkt = socket(AF_INET, SOCK_STREAM)
         connSkt.connect((tgtHost, tgtPort))
         connSkt.send('jsdfijidsjfoi\r\n')
-        results = connSkt.recv(1024)
-        screenLock.acquire()
-        print '     [+]%d/tcp open' % tgtPort
-        if (results == None) | (results == ''):
-            print '        No Response'
+        results = connSkt.recv(512)
+        portReport += '\n     [+]%d/tcp open' % tgtPort
+        if (results == None):
+            portReport += '\n        No Response'
         else:
-            print '        [Port %d Response]' % tgtPort
-            print '        ' + str(results).replace('\n', '\n        ')
+            portReport += '\n        [Port %d Response]' % tgtPort
+            portReport += '\n        ' + str(results).replace('\n', '\n        ')
     except:
-        screenLock.acquire()
         if (quiet == False):
-            print '     [-]%d/tcp closed' % tgtPort
+            portReport += '\n     [-]%d/tcp closed' % tgtPort
     finally:
         connSkt.close()
-        screenLock.release()
+        return portReport
 
+def reportResults(workerReports, jobReport, timeDelta, numPortsScanned):
+    if (workerReports == ''):
+        # print jobReport.replace('&TIME', '%d days %d hours %d minutes %d seconds' % prntime(timeDelta))
+        return
+    else:
+        print '------------------------------------------------------------------'
+        print jobReport.replace('&TIME', '%d days %d hours %d minutes %d seconds' % prntime(timeDelta)).replace('&PORT_NUM', numPortsScanned )
+        print workerReports
+        print '------------------------------------------------------------------'
+
+def prntime(ms):
+    s = ms/1000
+    m, s = divmod(s,60)
+    h, m = divmod(m,60)
+    d, h = divmod(h,24)
+    return (d,h,m,s)
 
 def portScan(tgtHost, tgtPorts, quiet):
+    startTime = time.time()
+    jobReport = ''
     try:
         tgtIP = gethostbyname(tgtHost)
     except:
-        print "[-] Cannot resolve '%s' Unknown host" % tgtHost
+        jobReport += "[-] Cannot resolve '%s' Unknown host" % tgtHost
         return
     try:
         tgtName = gethostbyaddr(tgtIP)
-        print '\n[+] Scan Results for: ' + tgtName[0]
+        jobReport += '[+] Scan Results for: ' + tgtName[0]
     except:
-        print '\n[+] Scan Results for: ' + tgtIP
+        jobReport += '[+] Scan Results for: ' + tgtIP
+    finally:
+        jobReport += '\n    Scanned &PORT_NUM ports in &TIME'
     setdefaulttimeout(1)
+    p = Pool()
+    workers = []
+    numPortsScanned = 0;
     for tgtPort in tgtPorts:
-        t = Thread(target=connScan, args=(tgtHost, int(tgtPort), quiet), name='scan[%s:%s]' % (tgtHost, tgtPort))
-        t.start()
-        time.sleep(0.1)
+        workers.append(p.apply_async(connScan, args=((tgtHost, int(tgtPort), quiet))))
+        numPortsScanned += 1
+    p.join() # wait for pool to complete
+    reportResults('\n'.join([x.value for x in workers if ((x.value != '') & (x.value != None))]), \
+        jobReport, int((time.time() - startTime) * 1000), str(numPortsScanned))
 
 
 def main():
@@ -66,18 +91,33 @@ def main():
     tgtPorts = str(options.tgtPort).split(',')
     quietMode = options.quiet
 
-    if (tgtHost == None ) | (tgtPorts[0] == None):
-        print parser.usage
+    if (tgtHost == None ):
+        print parser.usagef
         exit(0)
 
+    if (tgtPorts[0] == 'tcp'):
+        tgtPorts = (x for x in range(1, 65536))
+    else:
+        if not ((re.search('\\d+[-]\\d+',tgtPorts[0]))):
+           return
+        (min, max) = tgtPorts[0].split('-')
+        tgtPorts = (x for x in range(int(min), int(max) + 1))
+
+
+    startTime = time.time()
+    p = Pool()
     if (tgtHost.find('.x') != -1):
         for lastOctet in range(1, 255):
             curIp = tgtHost.replace('x', str(lastOctet))
-            t1 = Thread(target=portScan, name='scan[%s]' % curIp, args=(curIp, tgtPorts, quietMode))
-            t1.start()
-            time.sleep (0.25);
+            p = p.apply_async(portScan, args=(curIp, tgtPorts, quietMode))
     else:
-        portScan(tgtHost, tgtPorts, quietMode)
+        p = p.apply_async(portScan, args=(tgtHost, tgtPorts, quietMode))
+    p.join()
+    timeDelta = int((time.time() - startTime)*1000)
+    print '-----------------------------------------------------------------------------------'
+    print 'Total Time To Run ' + '%d days %d hours %d minutes %d seconds' % prntime(timeDelta)
+    print '-----------------------------------------------------------------------------------'
+
 
 
 if __name__ == '__main__':
